@@ -31,16 +31,34 @@ enum class Usage_Type
    };
 
 /**
-* This class represents X.509 Certificate
+* This class represents an X.509 Certificate
+* It implements v3 certificates 
 */
 class BOTAN_DLL X509_Certificate : public X509_Object
    {
    public:
       /**
-      * Get the public key associated with this certificate.
+      * Return a newly allocated copy of the public key associated
+      * with the subject of this certificate. This object is owned
+      * by the caller.
+      *
+      * @return public key
+      */
+      Public_Key* subject_public_key() const
+         {
+         return load_subject_public_key().release();
+         }
+
+      /**
+      * Create a public key object associated with the public key bits in this
+      * certificate. If the public key bits was valid for X.509 encoding
+      * purposes but invalid algorithmically (for example, RSA with an even
+      * modulus) that will be detected at this point, and an exception will be
+      * thrown.
+      *
       * @return subject public key of this certificate
       */
-      Public_Key* subject_public_key() const;
+      std::unique_ptr<Public_Key> load_subject_public_key() const;
 
       /**
       * Get the public key associated with this certificate.
@@ -106,16 +124,28 @@ class BOTAN_DLL X509_Certificate : public X509_Object
       std::vector<uint8_t> raw_subject_dn() const;
 
       /**
-      * Get the notBefore of the certificate.
+      * Get the notBefore of the certificate as a string
       * @return notBefore of the certificate
       */
-      std::string start_time() const;
+      std::string start_time() const
 
       /**
-      * Get the notAfter of the certificate.
+      * Get the notAfter of the certificate as a string
       * @return notAfter of the certificate
       */
-      std::string end_time() const;
+      std::string end_time() const
+
+      /**
+      * Get the notBefore of the certificate as X509_Time
+      * @return notBefore of the certificate
+      */
+      X509_Time not_before() const;
+
+      /**
+      * Get the notAfter of the certificate as X509_Time
+      * @return notAfter of the certificate
+      */
+      X509_Time not_after() const;
 
       /**
       * Get the X509 version of this certificate object.
@@ -306,9 +336,35 @@ class BOTAN_DLL X509_Certificate : public X509_Object
 
       X509_Certificate() {}
 
-      Data_Store m_subject, m_issuer;
-      bool m_self_signed;
+      size_t m_version;
+      BigInt m_serial_bn;
+      std::vector<uint8_t> m_serial_vec;
+      AlgorithmIdentifier m_sig_algo_inner;
+      X509_DN m_dn_issuer;
+      X509_DN m_dn_subject;
+      X509_Time m_not_before;
+      X509_Time m_not_after;
+      X509_DN m_subject_dn;
+      X509_DN m_issuer_dn;
+      std::vector<uint8_t> m_subject_public_key_bits;
+      AlgorithmIdentifier m_subject_public_key_algid;
+      std::vector<uint8_t> m_subject_public_key_bitstr;
+
+      std::vector<uint8_t> m_v2_issuer_key_id;
+      std::vector<uint8_t> m_v2_subject_key_id;
       Extensions m_v3_extensions;
+
+
+      std::vector<uint8_t> 
+
+
+      Data_Store m_subject_ds;
+      Data_Store m_issuer_ds;
+
+      bool m_self_signed;
+      bool m_ca_certificate;
+      size_t m_path_len_constraint;
+
    };
 
 /**
