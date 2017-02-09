@@ -1,6 +1,6 @@
 /*
 * X.509 Certificates
-* (C) 1999-2010,2015 Jack Lloyd
+* (C) 1999-2010,2015,2017 Jack Lloyd
 * (C) 2016 René Korthaus, Rohde & Schwarz Cybersecurity
 *
 * Botan is released under the Simplified BSD License (see license.txt)
@@ -50,7 +50,7 @@ std::vector<std::string> lookup_oids(const std::vector<std::string>& in)
 X509_Certificate::X509_Certificate(DataSource& in) :
    X509_Object(in, "CERTIFICATE/X509 CERTIFICATE"),
    m_self_signed(false),
-   m_v3_extensions(false)
+   m_v3_extensions(/*throw_on_unknown_critical=*/false)
    {
    do_decode();
    }
@@ -62,7 +62,7 @@ X509_Certificate::X509_Certificate(DataSource& in) :
 X509_Certificate::X509_Certificate(const std::string& fsname) :
    X509_Object(fsname, "CERTIFICATE/X509 CERTIFICATE"),
    m_self_signed(false),
-   m_v3_extensions(false)
+   m_v3_extensions(/*throw_on_unknown_critical=*/false)
    {
    do_decode();
    }
@@ -74,7 +74,7 @@ X509_Certificate::X509_Certificate(const std::string& fsname) :
 X509_Certificate::X509_Certificate(const std::vector<uint8_t>& in) :
    X509_Object(in, "CERTIFICATE/X509 CERTIFICATE"),
    m_self_signed(false),
-   m_v3_extensions(false)
+   m_v3_extensions(/*throw_on_unknown_critical=*/false)
    {
    do_decode();
    }
@@ -87,7 +87,7 @@ void X509_Certificate::force_decode()
    BER_Decoder tbs_cert(m_tbs_bits);
    BigInt serial_bn;
 
-   tbs_cert.decode_optional(version, ASN1_Tag(0),
+   tbs_cert.decode_optional(m_version, ASN1_Tag(0),
                             ASN1_Tag(CONSTRUCTED | CONTEXT_SPECIFIC))
       .decode(serial_bn)
       .decode(m_sig_algo_inner)
@@ -99,8 +99,11 @@ void X509_Certificate::force_decode()
       .end_cons()
       .decode(m_dn_subject);
 
-   if(version > 2)
-      throw Decoding_Error("Unknown X.509 cert version " + std::to_string(version));
+   // for general sanity convert wire version (0 based) to standards version (v1 .. v3)
+   m_version += 1;
+
+   if(m_version > 3)
+      throw Decoding_Error("Unknown X.509 cert version " + std::to_string(m_version));
    if(m_sig_algo != m_sig_algo_inner)
       throw Decoding_Error("X.509 Certificate had differing algorithm identifers in inner and outer ID fields");
 
@@ -135,51 +138,54 @@ void X509_Certificate::force_decode()
    if(tbs_cert.more_items())
       throw Decoding_Error("TBSCertificate has more items that expected");
 
-   /*
+
    m_subject_ds.add(m_dn_subject.contents());
    m_issuer_ds.add(m_dn_issuer.contents());
    m_subject_ds.add("X509.Certificate.dn_bits", m_dn_subject_bits);
    m_issuer_ds.add("X509.Certificate.dn_bits", m_dn_issuer_bits);
    m_v3_extensions.contents_to(m_subject_ds, m_issuer_ds);
 
-   m_subject.add("X509.Certificate.version", static_cast<uint32_t>(m_version));
-   m_subject.add("X509.Certificate.serial", BigInt::encode(m_serial_bn));
-   m_subject.add("X509.Certificate.start", m_start_time.to_string());
-   m_subject.add("X509.Certificate.end", m_end_time.to_string());
-   m_issuer.add("X509.Certificate.v2.key_id", m_v2_issuer_key_id);
-   m_subject.add("X509.Certificate.v2.key_id", m_v2_subject_key_id);
-   m_subject.add("X509.Certificate.public_key", hex_encode(m_subject_public_key_bits));
-   */
+   // Now cache some fields from the extensions
+   m_key_constraints = Key_Constraints(m_subject_ds.get1_uint32("X509v3.KeyUsage", NO_CONSTRAINTS));
 
-   m_self_signed = false;
    if(m_dn_subject == m_dn_issuer)
       {
       std::unique_ptr<Public_Key> pub_key(subject_public_key());
       m_self_signed = check_signature(*pub_key);
       }
 
-   if(m_self_signed && version == 0)
-      {
-      m_subject.add("X509v3.BasicConstraints.is_ca", 1);
-      m_subject.add("X509v3.BasicConstraints.path_constraint", Cert_Extension::NO_CERT_PATH_LIMIT);
-      }
+   m_path_len_constraint = m_subject_ds.get_value("X509v3.BasicConstraints.path_constraint", 0);
 
    if(is_CA_cert() &&
-      !m_subject.has_value("X509v3.BasicConstraints.path_constraint"))
+      !m_subject.has_value(
       {
       const size_t limit = (x509_version() < 3) ?
         Cert_Extension::NO_CERT_PATH_LIMIT : 0;
 
       m_subject.add("X509v3.BasicConstraints.path_constraint", static_cast<uint32_t>(limit));
       }
-   }
+
+      // These are never queried from directly, but are accessible (and documented)
+      m_subject.add("X509.Certificate.version", static_cast<uint32_t>(m_version));
+   m_subject.add("X509.Certificate.serial", BigInt::encode(m_serial_bn));
+   m_subject.add("X509.Certificate.start", m_start_time.to_string());
+   m_subject.add("X509.Certificate.end", m_end_time.to_string());
+   m_issuer.add("X509.Certificate.v2.key_id", m_v2_issuer_key_id);
+   m_subject.add("X509.Certificate.v2.key_id", m_v2_subject_key_id);
+   m_subject.add("X509.Certificate.public_key", hex_encode(m_subject_public_key_bits));
+      }
 
 /*
 * Return the X.509 version in use
 */
 uint32_t X509_Certificate::x509_version() const
    {
-   return m_version + 1;
+   return m_version;
+   }
+
+bool X509_Certificate::is_self_signed() const
+   {
+   return m_self_signed;
    }
 
 /*
@@ -249,18 +255,21 @@ std::vector<uint8_t> X509_Certificate::subject_public_key_bits() const
 std::vector<uint8_t> X509_Certificate::subject_public_key_bitstring() const
    {
    return m_subject_public_key_bitstring;
-
-   // TODO: cache this
    }
 
 std::vector<uint8_t> X509_Certificate::subject_public_key_bitstring_sha1() const
    {
-   return m_subject_public_key_bitstring_sha1;
+   if(m_subject_public_key_bitstring_sha1.empty())
+      {
+      std::unique_ptr<HashFunction> sha1(HashFunction::create("SHA-1"));
+      if(!sha1)
+         throw Encoding_Error("X509_Certificate::subject_public_key_bitstring_sha1 called but SHA-1 disabled in build");
 
-   // TODO: cache this value
-   std::unique_ptr<HashFunction> hash(HashFunction::create("SHA-1"));
-   hash->update(m_public_key_bitstr
-   return hash->final_stdvec();
+      sha1->update(m_public_key_bitstr);
+      m_subject_public_key_bitstring_sha1 = sha1->final_stdvec();
+      }
+
+   return m_subject_public_key_bitstring_sha1;
    }
 
 /*
@@ -367,8 +376,7 @@ bool X509_Certificate::is_critical(const std::string& ex_name) const
 */
 Key_Constraints X509_Certificate::constraints() const
    {
-   return Key_Constraints(m_subject.get1_uint32("X509v3.KeyUsage",
-                                              NO_CONSTRAINTS));
+   return m_key_constraints;
    }
 
 /*
@@ -453,22 +461,22 @@ X509_DN X509_Certificate::issuer_dn() const
    //return create_dn(m_issuer);
    }
 
-std::vector<uint8_t> X509_Certificate::raw_issuer_dn() const
-   {
-   return m_dn_bits;
-   //return m_issuer.get1_memvec("X509.Certificate.dn_bits");
-   }
-
 X509_DN X509_Certificate::subject_dn() const
    {
    return m_subject_dn;
    //return create_dn(m_subject);
    }
 
+std::vector<uint8_t> X509_Certificate::raw_issuer_dn() const
+   {
+   return m_issuer_dn_bits;
+   //return m_issuer.get1_memvec("X509.Certificate.dn_bits");
+   }
+
 std::vector<uint8_t> X509_Certificate::raw_subject_dn() const
    {
-   return m_dn_
-   return m_subject.get1_memvec("X509.Certificate.dn_bits");
+   return m_subject_dn_bits;
+   //return m_subject.get1_memvec("X509.Certificate.dn_bits");
    }
 
 std::string X509_Certificate::fingerprint(const std::string& hash_name) const
@@ -516,11 +524,20 @@ bool X509_Certificate::matches_dns_name(const std::string& name) const
 */
 bool X509_Certificate::operator==(const X509_Certificate& other) const
    {
-   return (m_sig == other.m_sig &&
+   /*
+   Generally PKIX assumes (issuer,serial) is unique so in theory just
+   comparing those two would be sufficient.
+
+   Compare the signature and serial numbers first, which handles the
+   common case quickly since these are just std::vector<uint8_t>s
+   */
+   return (m_serial == other.m_serial &&
+           m_sig == other.m_sig &&
            m_sig_algo == other.m_sig_algo &&
-           m_self_signed == other.m_self_signed &&
-           m_issuer == other.m_issuer &&
-           m_subject == other.m_subject);
+           m_dn_issuer == other.m_dn_issuer &&
+           m_dn_subject == other.m_dn_subject &&
+           m_not_before == other.m_not_before &&
+           m_not_after == other.m_not_after);
    }
 
 bool X509_Certificate::operator<(const X509_Certificate& other) const

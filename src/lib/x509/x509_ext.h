@@ -109,9 +109,11 @@ class BOTAN_DLL Extensions : public ASN1_Object
       * Searches for an extension by OID and returns the result.
       * Only the known extensions types declared in this header
       * are searched for by this function.
-      * @return Pointer to extension with oid, nullptr if not found.
+      * @return Copy of extension with oid, nullptr if not found.
       */
       std::unique_ptr<Certificate_Extension> get(const OID& oid) const;
+
+      
 
       /**
       * Searches for an extension by OID and returns the result.
@@ -159,10 +161,11 @@ class BOTAN_DLL Extensions : public ASN1_Object
       Extensions(const Extensions&);
 
       /**
-      * @param st whether to throw an exception when encountering an unknown
+      * @param throw_on_unknown whether to throw an exception when encountering an unknown
       * extension type during decoding
       */
-      explicit Extensions(bool st = true) : m_throw_on_unknown_critical(st) {}
+      explicit Extensions(bool throw_on_unknown = true) :
+         m_throw_on_unknown_critical(throw_on_unknown) {}
 
    private:
       static Certificate_Extension* create_extension(const OID&, bool);

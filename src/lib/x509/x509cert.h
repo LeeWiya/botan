@@ -1,6 +1,6 @@
 /*
 * X.509 Certificates
-* (C) 1999-2007,2015 Jack Lloyd
+* (C) 1999-2007,2015,2017 Jack Lloyd
 *
 * Botan is released under the Simplified BSD License (see license.txt)
 */
@@ -61,16 +61,17 @@ class BOTAN_DLL X509_Certificate : public X509_Object
       std::unique_ptr<Public_Key> load_subject_public_key() const;
 
       /**
-      * Get the public key associated with this certificate.
+      * Get the public key associated with this certificate. This includes the
+      * outer AlgorithmIdentifier
       * @return subject public key of this certificate
       */
-      std::vector<uint8_t> subject_public_key_bits() const;
+      std::vector<uint8_t> subject_public_key_bits() const { return m_subject_public_key_bits; }
 
       /**
       * Get the bit string of the public key associated with this certificate
-      * @return subject public key of this certificate
+      * @return public key bits
       */
-      std::vector<uint8_t> subject_public_key_bitstring() const;
+      std::vector<uint8_t> subject_public_key_bitstring() const { return m_subject_public_key_bitstr; }
 
       /**
       * Get the SHA-1 bit string of the public key associated with this certificate.
@@ -173,9 +174,10 @@ class BOTAN_DLL X509_Certificate : public X509_Object
 
       /**
       * Check whether this certificate is self signed.
+      * If the DN issuer and subject agree, 
       * @return true if this certificate is self signed
       */
-      bool is_self_signed() const { return m_self_signed; }
+      bool is_self_signed() const;
 
       /**
       * Check whether this certificate is a CA certificate.
@@ -336,9 +338,8 @@ class BOTAN_DLL X509_Certificate : public X509_Object
 
       X509_Certificate() {}
 
-      size_t m_version;
-      BigInt m_serial_bn;
-      std::vector<uint8_t> m_serial_vec;
+      size_t m_version = 0;
+      std::vector<uint8_t> m_serial;
       AlgorithmIdentifier m_sig_algo_inner;
       X509_DN m_dn_issuer;
       X509_DN m_dn_subject;
@@ -348,15 +349,16 @@ class BOTAN_DLL X509_Certificate : public X509_Object
       X509_DN m_issuer_dn;
       std::vector<uint8_t> m_subject_public_key_bits;
       AlgorithmIdentifier m_subject_public_key_algid;
-      std::vector<uint8_t> m_subject_public_key_bitstr;
+      std::vector<uint8_t> m_subject_public_key_bitstring;
+
+      // computed as needed in subject_public_key_bitstring_sha1
+      mutable std::vector<uint8_t> m_subject_public_key_bitstring_sha1;
 
       std::vector<uint8_t> m_v2_issuer_key_id;
       std::vector<uint8_t> m_v2_subject_key_id;
       Extensions m_v3_extensions;
 
-
-      std::vector<uint8_t> 
-
+      Key_Constraints m_key_constraints;
 
       Data_Store m_subject_ds;
       Data_Store m_issuer_ds;
@@ -364,7 +366,6 @@ class BOTAN_DLL X509_Certificate : public X509_Object
       bool m_self_signed;
       bool m_ca_certificate;
       size_t m_path_len_constraint;
-
    };
 
 /**
