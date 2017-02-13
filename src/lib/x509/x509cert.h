@@ -65,17 +65,17 @@ class BOTAN_DLL X509_Certificate : public X509_Object
       * outer AlgorithmIdentifier
       * @return subject public key of this certificate
       */
-      std::vector<uint8_t> subject_public_key_bits() const { return m_subject_public_key_bits; }
+      std::vector<uint8_t> subject_public_key_bits() const;
 
       /**
       * Get the bit string of the public key associated with this certificate
       * @return public key bits
       */
-      std::vector<uint8_t> subject_public_key_bitstring() const { return m_subject_public_key_bitstr; }
+      std::vector<uint8_t> subject_public_key_bitstring() const;
 
       /**
       * Get the SHA-1 bit string of the public key associated with this certificate.
-      * This is used for OCSP among other protocols
+      * This is used for OCSP among other protocols.
       * @return hash of subject public key of this certificate
       */
       std::vector<uint8_t> subject_public_key_bitstring_sha1() const;
@@ -84,13 +84,13 @@ class BOTAN_DLL X509_Certificate : public X509_Object
       * Get the certificate's issuer distinguished name (DN).
       * @return issuer DN of this certificate
       */
-      X509_DN issuer_dn() const;
+      const X509_DN& issuer_dn() const;
 
       /**
       * Get the certificate's subject distinguished name (DN).
       * @return subject DN of this certificate
       */
-      X509_DN subject_dn() const;
+      const X509_DN& subject_dn() const;
 
       /**
       * Get a value for a specific subject_info parameter name.
@@ -101,7 +101,7 @@ class BOTAN_DLL X509_Certificate : public X509_Object
       * "X509v3.BasicConstraints.path_constraint",
       * "X509v3.BasicConstraints.is_ca", "X509v3.NameConstraints",
       * "X509v3.ExtendedKeyUsage", "X509v3.CertificatePolicies",
-      * "X509v3.SubjectKeyIdentifier" or "X509.Certificate.serial".
+      * "X509v3.SubjectKeyIdentifier"
       * @return value(s) of the specified parameter
       */
       std::vector<std::string> subject_info(const std::string& name) const;
@@ -128,13 +128,13 @@ class BOTAN_DLL X509_Certificate : public X509_Object
       * Get the notBefore of the certificate as a string
       * @return notBefore of the certificate
       */
-      std::string start_time() const
+      std::string start_time() const;
 
       /**
       * Get the notAfter of the certificate as a string
       * @return notAfter of the certificate
       */
-      std::string end_time() const
+      std::string end_time() const;
 
       /**
       * Get the notBefore of the certificate as X509_Time
@@ -266,6 +266,28 @@ class BOTAN_DLL X509_Certificate : public X509_Object
       Extensions v3_extensions() const;
 
       /**
+      * Return the v2 issuer key ID. v2 key IDs are almost never used,
+      * instead see v3_subject_key_id.
+      */
+      std::vector<uint32_t> v2_issuer_key_id() const;
+
+      /**
+      * Return the v2 subject key ID. v2 key IDs are almost never used,
+      * instead see v3_subject_key_id.
+      */
+      std::vector<uint32_t> v2_subject_key_id() const;
+
+      /**
+      * Return the v3 issuer key ID
+      */
+      std::vector<uint32_t> v3_issuer_key_id() const;
+
+      /**
+      * Return the v3 subject key ID
+      */
+      std::vector<uint32_t> v3_subject_key_id() const;
+
+      /**
       * Return the listed address of an OCSP responder, or empty if not set
       */
       std::string ocsp_responder() const;
@@ -276,7 +298,7 @@ class BOTAN_DLL X509_Certificate : public X509_Object
       std::string crl_distribution_point() const;
 
       /**
-      * @return a string describing the certificate
+      * @return a free-form string describing the certificate
       */
       std::string to_string() const;
 
@@ -338,34 +360,42 @@ class BOTAN_DLL X509_Certificate : public X509_Object
 
       X509_Certificate() {}
 
+      // TODO: pimpl
+      // struct X509_Certificate_Data;
+      //std::unique_ptr<X509_Certificate_Data> m_cert_data;
       size_t m_version = 0;
       std::vector<uint8_t> m_serial;
       AlgorithmIdentifier m_sig_algo_inner;
-      X509_DN m_dn_issuer;
-      X509_DN m_dn_subject;
+      X509_DN m_issuer_dn;
+      X509_DN m_subject_dn;
+      std::vector<uint8_t> m_issuer_dn_bits;
+      std::vector<uint8_t> m_subject_dn_bits;
       X509_Time m_not_before;
       X509_Time m_not_after;
-      X509_DN m_subject_dn;
-      X509_DN m_issuer_dn;
       std::vector<uint8_t> m_subject_public_key_bits;
       AlgorithmIdentifier m_subject_public_key_algid;
       std::vector<uint8_t> m_subject_public_key_bitstring;
-
       // computed as needed in subject_public_key_bitstring_sha1
       mutable std::vector<uint8_t> m_subject_public_key_bitstring_sha1;
 
       std::vector<uint8_t> m_v2_issuer_key_id;
       std::vector<uint8_t> m_v2_subject_key_id;
-      Extensions m_v3_extensions;
 
       Key_Constraints m_key_constraints;
+      std::vector<OID> m_extended_key_constraints;
+      std::vector<uint8_t> m_authority_key_id;
+      std::vector<uint8_t> m_subject_key_id;
 
+      std::vector<std::string> m_crl_distribution_points;
+      std::vector<std::string> m_ocsp_distribution_points;
+
+      size_t m_path_len_constraint = 0;
+      bool m_self_signed = false;
+      bool m_ca_certificate = false;
+
+      Extensions m_v3_extensions;
       Data_Store m_subject_ds;
       Data_Store m_issuer_ds;
-
-      bool m_self_signed;
-      bool m_ca_certificate;
-      size_t m_path_len_constraint;
    };
 
 /**

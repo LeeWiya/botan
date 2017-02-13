@@ -30,7 +30,14 @@ class BOTAN_DLL Certificate_Extension
       /**
       * @return OID representing this extension
       */
-      virtual OID oid_of() const;
+      virtual OID oid_of() const = 0;
+
+      /*
+      * @return specific OID name
+      * If possible OIDS table should match oid_name to OIDS, ie
+      * OIDS::lookup(ext->oid_name()) == ext->oid_of()
+      */
+      virtual std::string oid_name() const = 0;
 
       /**
       * Make a copy of this extension
@@ -44,13 +51,9 @@ class BOTAN_DLL Certificate_Extension
       * @param subject the subject info
       * @param issuer the issuer info
       */
+      BOTAN_DEPRECATED("Use Extensions::get_extension_object")
       virtual void contents_to(Data_Store& subject,
                                Data_Store& issuer) const = 0;
-
-      /*
-      * @return specific OID name
-      */
-      virtual std::string oid_name() const = 0;
 
       /*
       * Callback visited during path validation.
@@ -83,9 +86,40 @@ class BOTAN_DLL Certificate_Extension
 /**
 * X.509 Certificate Extension List
 */
-class BOTAN_DLL Extensions : public ASN1_Object
+class BOTAN_DLL Extensions final : public ASN1_Object
    {
    public:
+      /**
+      * Look up an object in the extensions, based on OID Returns
+      * nullptr if not set, if the extension was either absent or not
+      * handled. The pointer returned is owned by the Extensions
+      * object.
+      */
+      template<typename T>
+      const T* get_extension_object(const OID& oid = T::static_oid())
+         {
+         auto extn_info = m_extension_info.find(oid);
+
+         if(extn_info != m_extension_info.end())
+            {
+            if(extn_info->second.m_decoded.get() == nullptr)
+               {
+               extn_info->second.m_decoded =
+                  decode_extension_object(extn_info->first,
+                                          extn_info->second.m_critical,
+                                          extn_info->second.m_value);
+               }
+            return dynamic_cast<const T*>(extn_info->second.m_decoded.get());
+            }
+
+         return nullptr;
+         }
+
+      /**
+      * Return the set of extensions in the order they appeared in the certificate
+      */
+      std::vector<OID> get_extension_oids() const;
+
       void encode_into(class DER_Encoder&) const override;
       void decode_from(class BER_Decoder&) override;
       void contents_to(Data_Store&, Data_Store&) const;
@@ -111,36 +145,43 @@ class BOTAN_DLL Extensions : public ASN1_Object
       * are searched for by this function.
       * @return Copy of extension with oid, nullptr if not found.
       */
+      BOTAN_DEPRECATED("Use get_extension_object")
       std::unique_ptr<Certificate_Extension> get(const OID& oid) const;
 
-      
-
       /**
-      * Searches for an extension by OID and returns the result.
-      * Only the unknown extensions, that is, extensions
-      * types that are not declared in this header, are searched
-      * for by this function.
-      * @return Pointer to extension with oid, nullptr if not found.
+      * Searches for an extension by OID and returns the result decoding
+      * it to some arbitrary extension type chosen by the application.
+      *
+      * Only the unknown extensions, that is, extensions types that
+      * are not declared in this header, are searched for by this
+      * function.
+      *
+      * @return Pointer to new  extension with oid, nullptr if not found.
       */
       template<typename T>
       std::unique_ptr<T> get_raw(const OID& oid)
-      {
-      try
          {
-         if(m_extensions_raw.count(oid) > 0)
+         auto extn_info = m_extension_info.find(oid);
+
+         if(extn_info != m_extension_info.end())
             {
-            std::unique_ptr<T> ext(new T);
-            ext->decode_inner(m_extensions_raw[oid].first);
-            return std::move(ext);
+            if(extn_info->second.m_decoded.get() == nullptr)
+               {
+               extn_info->second.m_decoded =
+                  decode_extension_object(extn_info->first,
+                                          extn_info->second.m_critical,
+                                          extn_info->second.m_value);
+
+               if(extn_info->second.m_decoded == nullptr)
+                  {
+                  // We've now verified this extension was unknown
+                  std::unique_ptr<T> ext(new T);
+                  ext->decode_inner(extn_info->second.m_value);
+                  return std::move(ext);
+                  }
+               }
             }
          }
-      catch(std::exception& e)
-         {
-         throw Decoding_Error("Exception while decoding extension " +
-                              oid.as_string() + ": " + e.what());
-         }
-      return nullptr;
-      }
 
       /**
       * Returns the list of extensions together with the corresponding
@@ -156,23 +197,37 @@ class BOTAN_DLL Extensions : public ASN1_Object
       */
       std::map<OID, std::pair<std::vector<uint8_t>, bool>> extensions_raw() const;
 
+      Extensions() {}
+      Extensions(const Extensions&);
       Extensions& operator=(const Extensions&);
 
-      Extensions(const Extensions&);
-
-      /**
-      * @param throw_on_unknown whether to throw an exception when encountering an unknown
-      * extension type during decoding
-      */
-      explicit Extensions(bool throw_on_unknown = true) :
-         m_throw_on_unknown_critical(throw_on_unknown) {}
-
    private:
-      static Certificate_Extension* create_extension(const OID&, bool);
+      static std::unique_ptr<Certificate_Extension>
+      decode_extension_object(bool return_null_if_unknown,
+                              const OID& oid,
+                              bool critical,
+                              std::vector<uint8_t>& body);
 
-      std::vector<std::pair<std::unique_ptr<Certificate_Extension>, bool>> m_extensions;
-      bool m_throw_on_unknown_critical;
-      std::map<OID, std::pair<std::vector<uint8_t>, bool>> m_extensions_raw;
+      class Extensions_Info {
+      public:
+         Extensions_Info(bool critical, std::vector<uint8_t>& body) {}
+
+         Extensions_Info(bool critical, Certificate_Extension* extn) :
+            m_critical(critical),
+            m_value(extn->decode_inner()),
+            m_decoded(extn)
+            {}
+
+      private:
+         bool m_critical = false;
+         std::vector<uint8_t> m_value;
+         std::unique_ptr<Certificate_Extension> m_decoded;
+         };
+
+      std::map<OID, Extensions_Info> m_extension_info;
+
+      //std::map<OID, std::pair<std::vector<uint8_t>, bool>> m_extensions_raw;
+      //std::vector<std::pair<std::unique_ptr<Certificate_Extension>, bool>> m_extensions;
    };
 
 namespace Cert_Extension {
@@ -193,6 +248,9 @@ class BOTAN_DLL Basic_Constraints final : public Certificate_Extension
 
       bool get_is_ca() const { return m_is_ca; }
       size_t get_path_limit() const;
+
+      static OID static_oid() { return OID("2.5.29.19"); }
+      OID oid_of() const { return static_oid(); }
 
    private:
       std::string oid_name() const override
@@ -218,6 +276,9 @@ class BOTAN_DLL Key_Usage final : public Certificate_Extension
 
       Key_Constraints get_constraints() const { return m_constraints; }
 
+      static OID static_oid() { return OID("2.5.29.15"); }
+      OID oid_of() const { return static_oid(); }
+
    private:
       std::string oid_name() const override { return "X509v3.KeyUsage"; }
 
@@ -240,9 +301,15 @@ class BOTAN_DLL Subject_Key_ID final : public Certificate_Extension
          { return new Subject_Key_ID(m_key_id); }
 
       Subject_Key_ID() {}
-      explicit Subject_Key_ID(const std::vector<uint8_t>&);
 
       std::vector<uint8_t> get_key_id() const { return m_key_id; }
+
+      Subject_Key_ID(const std::vector<uint8_t>& public_key,
+                     const std::string& hash_fn = "SHA-1");
+
+      static OID static_oid() { return OID("2.5.29.14"); }
+      OID oid_of() const { return static_oid(); }
+
    private:
       std::string oid_name() const override
          { return "X509v3.SubjectKeyIdentifier"; }
@@ -269,6 +336,9 @@ class BOTAN_DLL Authority_Key_ID final : public Certificate_Extension
 
       std::vector<uint8_t> get_key_id() const { return m_key_id; }
 
+      static OID static_oid() { return OID("2.5.29.35"); }
+      OID oid_of() const { return static_oid(); }
+
    private:
       std::string oid_name() const override
          { return "X509v3.AuthorityKeyIdentifier"; }
@@ -282,52 +352,59 @@ class BOTAN_DLL Authority_Key_ID final : public Certificate_Extension
    };
 
 /**
-* Alternative Name Extension Base Class
+* Subject Alternative Name Extension
 */
-class BOTAN_DLL Alternative_Name : public Certificate_Extension
+class BOTAN_DLL Subject_Alternative_Name final : public Certificate_Extension
    {
    public:
-      AlternativeName get_alt_name() const { return m_alt_name; }
+      const AlternativeName& get_alt_name() const { return m_alt_name; }
 
-   protected:
-      Alternative_Name(const AlternativeName&, const std::string& oid_name);
+      static OID static_oid() { return OID("2.5.29.35"); }
+      OID oid_of() const { return static_oid(); }
 
-      Alternative_Name(const std::string&, const std::string&);
+      Subject_Alternative_Name* copy() const override
+         { return new Subject_Alternative_Name(get_alt_name()); }
+
+      explicit Subject_Alternative_Name(const AlternativeName& name = AlternativeName()) :
+         m_alt_name(name) {}
 
    private:
-      std::string oid_name() const override { return m_oid_name_str; }
+      std::string oid_name() const override { return "X509v3.SubjectAlternativeName"; }
 
       bool should_encode() const override { return m_alt_name.has_items(); }
       std::vector<uint8_t> encode_inner() const override;
       void decode_inner(const std::vector<uint8_t>&) override;
       void contents_to(Data_Store&, Data_Store&) const override;
 
-      std::string m_oid_name_str;
       AlternativeName m_alt_name;
-   };
-
-/**
-* Subject Alternative Name Extension
-*/
-class BOTAN_DLL Subject_Alternative_Name : public Alternative_Name
-   {
-   public:
-      Subject_Alternative_Name* copy() const override
-         { return new Subject_Alternative_Name(get_alt_name()); }
-
-      explicit Subject_Alternative_Name(const AlternativeName& = AlternativeName());
    };
 
 /**
 * Issuer Alternative Name Extension
 */
-class BOTAN_DLL Issuer_Alternative_Name : public Alternative_Name
+class BOTAN_DLL Issuer_Alternative_Name final : public Certificate_Extension
    {
    public:
+      const AlternativeName& get_alt_name() const { return m_alt_name; }
+
+      static OID static_oid() { return OID("2.5.29.18"); }
+      OID oid_of() const { return static_oid(); }
+
       Issuer_Alternative_Name* copy() const override
          { return new Issuer_Alternative_Name(get_alt_name()); }
 
-      explicit Issuer_Alternative_Name(const AlternativeName& = AlternativeName());
+      explicit Issuer_Alternative_Name(const AlternativeName& name = AlternativeName()) :
+         m_alt_name(name) {}
+
+   private:
+      std::string oid_name() const override { return "X509v3.IssuerAlternativeName"; }
+
+      bool should_encode() const override { return m_alt_name.has_items(); }
+      std::vector<uint8_t> encode_inner() const override;
+      void decode_inner(const std::vector<uint8_t>&) override;
+      void contents_to(Data_Store&, Data_Store&) const override;
+
+      AlternativeName m_alt_name;
    };
 
 /**
@@ -342,11 +419,13 @@ class BOTAN_DLL Extended_Key_Usage final : public Certificate_Extension
       Extended_Key_Usage() {}
       explicit Extended_Key_Usage(const std::vector<OID>& o) : m_oids(o) {}
 
-      std::vector<OID> get_oids() const { return m_oids; }
+      const std::vector<OID>& get_oids() const { return m_oids; }
+
+      static OID static_oid() { return OID("2.5.29.37"); }
+      OID oid_of() const { return static_oid(); }
 
    private:
-      std::string oid_name() const override
-         { return "X509v3.ExtendedKeyUsage"; }
+      std::string oid_name() const override { return "X509v3.ExtendedKeyUsage"; }
 
       bool should_encode() const override { return (m_oids.size() > 0); }
       std::vector<uint8_t> encode_inner() const override;
@@ -373,6 +452,11 @@ class BOTAN_DLL Name_Constraints : public Certificate_Extension
             std::vector<std::set<Certificate_Status_Code>>& cert_status,
             size_t pos) override;
 
+      const NameConstraints& get_name_constraints() const { return m_name_constraints; }
+
+      static OID static_oid() { return OID("2.5.29.30"); }
+      OID oid_of() const { return static_oid(); }
+
    private:
       std::string oid_name() const override
          { return "X509v3.NameConstraints"; }
@@ -397,7 +481,13 @@ class BOTAN_DLL Certificate_Policies final : public Certificate_Extension
       Certificate_Policies() {}
       explicit Certificate_Policies(const std::vector<OID>& o) : m_oids(o) {}
 
+      BOTAN_DEPRECATED("Use get_policy_oids")
       std::vector<OID> get_oids() const { return m_oids; }
+
+      const std::vector<OID>& get_policy_oids() const { return m_oids; }
+
+      static OID static_oid() { return OID("2.5.29.32"); }
+      OID oid_of() const { return static_oid(); }
 
    private:
       std::string oid_name() const override
@@ -421,6 +511,11 @@ class BOTAN_DLL Authority_Information_Access final : public Certificate_Extensio
 
       explicit Authority_Information_Access(const std::string& ocsp) :
          m_ocsp_responder(ocsp) {}
+
+      std::string ocsp_responder() const { return m_ocsp_responder; }
+
+      static OID static_oid() { return OID("1.3.6.1.5.5.7.1.1"); }
+      OID oid_of() const { return static_oid(); }
 
    private:
       std::string oid_name() const override
@@ -449,6 +544,9 @@ class BOTAN_DLL CRL_Number final : public Certificate_Extension
 
       size_t get_crl_number() const;
 
+      static OID static_oid() { return OID("2.5.29.20"); }
+      OID oid_of() const { return static_oid(); }
+
    private:
       std::string oid_name() const override { return "X509v3.CRLNumber"; }
 
@@ -473,6 +571,9 @@ class BOTAN_DLL CRL_ReasonCode final : public Certificate_Extension
       explicit CRL_ReasonCode(CRL_Code r = UNSPECIFIED) : m_reason(r) {}
 
       CRL_Code get_reason() const { return m_reason; }
+
+      static OID static_oid() { return OID("2.5.29.21"); }
+      OID oid_of() const { return static_oid(); }
 
    private:
       std::string oid_name() const override { return "X509v3.ReasonCode"; }
@@ -510,8 +611,14 @@ class BOTAN_DLL CRL_Distribution_Points final : public Certificate_Extension
       explicit CRL_Distribution_Points(const std::vector<Distribution_Point>& points) :
          m_distribution_points(points) {}
 
-      std::vector<Distribution_Point> distribution_points() const
+      const std::vector<Distribution_Point>& distribution_points() const
          { return m_distribution_points; }
+
+      const std::vector<std::string>& crl_distribution_urls() const
+         { return m_crl_distribution_urls; }
+
+      static OID static_oid() { return OID("2.5.29.31"); }
+      OID oid_of() const { return static_oid(); }
 
    private:
       std::string oid_name() const override
@@ -525,29 +632,39 @@ class BOTAN_DLL CRL_Distribution_Points final : public Certificate_Extension
       void contents_to(Data_Store&, Data_Store&) const override;
 
       std::vector<Distribution_Point> m_distribution_points;
+      std::vector<std::string> m_crl_distribution_urls;
    };
 
 /**
-* An unknown X.509 extension marked as critical
-* Will always add a failure to the path validation result.
+* An unknown X.509 extension
+* Will add a failure to the path validation result, if critical
 */
-class BOTAN_DLL Unknown_Critical_Extension final : public Certificate_Extension
+class BOTAN_DLL Unknown_Extension final : public Certificate_Extension
    {
    public:
-      explicit Unknown_Critical_Extension(OID oid) : m_oid(oid) {}
+      Unknown_Extension(const OID& oid, bool critical) :
+         m_oid(oid), m_critical(critical) {}
 
-      Unknown_Critical_Extension* copy() const override
-         { return new Unknown_Critical_Extension(m_oid); }
+      Unknown_Extension* copy() const override
+         { return new Unknown_Extension(m_oid, m_critical); }
 
       OID oid_of() const override
          { return m_oid; };
+
+      //static_oid not defined for Unknown_Extension
+
+      const std::vector<uint8_t>& contents() const
+         { return m_bytes; }
 
       void validate(const X509_Certificate&, const X509_Certificate&,
       		const std::vector<std::shared_ptr<const X509_Certificate>>&,
       		std::vector<std::set<Certificate_Status_Code>>& cert_status,
       		size_t pos) override
          {
-         cert_status.at(pos).insert(Certificate_Status_Code::UNKNOWN_CRITICAL_EXTENSION);
+         if(m_critical)
+            {
+            cert_status.at(pos).insert(Certificate_Status_Code::UNKNOWN_CRITICAL_EXTENSION);
+            }
          }
 
    private:
@@ -560,6 +677,8 @@ class BOTAN_DLL Unknown_Critical_Extension final : public Certificate_Extension
       void contents_to(Data_Store&, Data_Store&) const override;
 
       OID m_oid;
+      bool m_critical;
+      std::vector<uint8_t> m_bytes;
    };
 
 }

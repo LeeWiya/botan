@@ -123,6 +123,7 @@ class BOTAN_DLL X509_CA
                         RandomNumberGenerator& rng) const;
 
       AlgorithmIdentifier m_ca_sig_algo;
+      std::string m_hash_fn;
       X509_Certificate m_cert;
       PK_Signer* m_signer;
    };
