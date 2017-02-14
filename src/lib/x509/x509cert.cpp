@@ -256,11 +256,19 @@ X509_Certificate::issuer_info(const std::string& what) const
 */
 std::unique_ptr<Public_Key> X509_Certificate::load_subject_public_key() const
    {
-   return std::unique_ptr<Public_Key>(X509::load_key(m_subject_public_key_bits));
-   /*
-   return X509::load_key(
-      ASN1::put_in_sequence(this->subject_public_key_bits()));
-   */
+   //return std::unique_ptr<Public_Key>(X509::load_key(m_subject_public_key_bits));
+
+   try
+      {
+      std::unique_ptr<Public_Key> pubkey(X509::load_key(ASN1::put_in_sequence(this->subject_public_key_bits())));
+      // TODO: should this sanity test the returned public key?
+      // For example rejecting outright RSA < 512 bit, etc
+      return pubkey;
+      }
+   catch(std::exception& e)
+      {
+      throw Decoding_Error("X509_Certificate::load_subject_public_key", e.what());
+      }
    }
 
 std::vector<uint8_t> X509_Certificate::subject_public_key_bits() const
