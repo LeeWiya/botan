@@ -152,8 +152,8 @@ void X509_Certificate::force_decode()
    m_subject_ds.add("X509.Certificate.dn_bits", m_subject_dn_bits);
    m_subject_ds.add("X509.Certificate.version", static_cast<uint32_t>(m_version));
    m_subject_ds.add("X509.Certificate.serial", BigInt::encode(serial_bn));
-   m_subject_ds.add("X509.Certificate.start", m_start_time.to_string());
-   m_subject_ds.add("X509.Certificate.end", m_end_time.to_string());
+   m_subject_ds.add("X509.Certificate.start", m_not_before.to_string());
+   m_subject_ds.add("X509.Certificate.end", m_not_after.to_string());
    m_subject_ds.add("X509.Certificate.v2.key_id", m_v2_subject_key_id);
    m_subject_ds.add("X509.Certificate.public_key", hex_encode(m_subject_public_key_bits));
 
@@ -203,12 +203,12 @@ X509_Time X509_Certificate::not_after() const
    return m_not_after;
    }
 
-std::vector<uint32_t> X509_Certificate::v2_issuer_key_id() const
+std::vector<uint8_t> X509_Certificate::v2_issuer_key_id() const
    {
-   returm m_v2_issuer_key_id;
+   return m_v2_issuer_key_id;
    }
 
-std::vector<uint32_t> X509_Certificate::v2_subject_key_id() const
+std::vector<uint8_t> X509_Certificate::v2_subject_key_id() const
    {
    return m_v2_subject_key_id;
    }
@@ -221,11 +221,11 @@ X509_Certificate::subject_info(const std::string& what) const
    {
    const std::string req = X509_DN::deref_info_field(what);
    if(req == "X509.Certificate.v2.key_id")
-      return this->v2_subject_key_id();
+      return {hex_encode(this->v2_subject_key_id())};
    if(req == "X509v3.SubjectKeyIdentifier")
-      return this->subject_key_id();
+      return {hex_encode(this->subject_key_id())};
    if(req == "X509.Certificate.dn_bits")
-      return this->raw_subject_dn();
+      return {hex_encode(this->raw_subject_dn())};
    return m_subject_ds.get(req);
    }
 
@@ -245,10 +245,10 @@ X509_Certificate::issuer_info(const std::string& what) const
    if(req == "X509.Certificate.public_key")
       return {hex_encode(this->subject_key_id())};
 
-   std::string empty = m_issuer.get(req);
-   if(empty != "")
-      printf("Unexpected issuer_info result for '%s' '%s'", what.c_str(), empty.c_str());
-   return empty;
+   std::vector<std::string> datum = m_issuer_ds.get(req);
+   if(datum.size() > 0)
+      printf("Unexpecte.d issuer_info result for '%s' '%s'", what.c_str(), datum[0].c_str());
+   return {datum};
    }
 
 /*
@@ -265,7 +265,7 @@ std::unique_ptr<Public_Key> X509_Certificate::load_subject_public_key() const
 
 std::vector<uint8_t> X509_Certificate::subject_public_key_bits() const
    {
-   return m_subject_key_bits;
+   return m_subject_public_key_bits;
    //return hex_decode(m_subject_ds.get1("X509.Certificate.public_key"));
    }
 
@@ -480,7 +480,7 @@ std::vector<uint8_t> X509_Certificate::subject_key_id() const
 */
 std::vector<uint8_t> X509_Certificate::serial_number() const
    {
-   return m_serial_vec;
+   return m_serial;
    //return m_subject_ds.get1_memvec("X509.Certificate.serial");
    }
 

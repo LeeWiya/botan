@@ -36,6 +36,7 @@ class BOTAN_DLL Certificate_Extension
       * @return specific OID name
       * If possible OIDS table should match oid_name to OIDS, ie
       * OIDS::lookup(ext->oid_name()) == ext->oid_of()
+      * Should return empty string if OID is not known
       */
       virtual std::string oid_name() const = 0;
 
@@ -94,22 +95,23 @@ class BOTAN_DLL Extensions final : public ASN1_Object
       * nullptr if not set, if the extension was either absent or not
       * handled. The pointer returned is owned by the Extensions
       * object.
+      * This would be better with an optional<T> return value
       */
-      template<typename T>
-      const T* get_extension_object(const OID& oid = T::static_oid())
-         {
-         auto extn_info = m_extension_info.find(oid);
+      const Certificate_Extension* get_extension_object(const OID& oid) const;
 
-         if(extn_info != m_extension_info.end())
+      template<typename T>
+      const T* get_extension_object_as(const OID& oid = T::static_oid()) const
+         {
+         if(const Certificate_Extension* extn = get_extension_object(oid))
             {
-            if(extn_info->second.m_decoded.get() == nullptr)
+            if(const T* extn_as_T = dynamic_cast<const T*>(extn))
                {
-               extn_info->second.m_decoded =
-                  decode_extension_object(extn_info->first,
-                                          extn_info->second.m_critical,
-                                          extn_info->second.m_value);
+               return extn_as_T;
                }
-            return dynamic_cast<const T*>(extn_info->second.m_decoded.get());
+            else
+               {
+               throw Exception("Exception::get_extension_object_as dynamic_cast failed");
+               }
             }
 
          return nullptr;
@@ -117,8 +119,25 @@ class BOTAN_DLL Extensions final : public ASN1_Object
 
       /**
       * Return the set of extensions in the order they appeared in the certificate
+      * (or as they were added, if constructed)
       */
       std::vector<OID> get_extension_oids() const;
+
+      /**
+      * Return true if an extension was set
+      */
+      bool extension_set(const OID& oid) const;
+
+      /**
+      * Return true if an extesion was set and marked critical
+      */
+      bool critical_extension_set(const OID& oid) const;
+
+      /**
+      * Return the raw bytes of the extension
+      * Will throw if OID was not set as an extension.
+      */
+      std::vector<uint8_t> get_extension_bits(const OID& oid) const;
 
       void encode_into(class DER_Encoder&) const override;
       void decode_from(class BER_Decoder&) override;
@@ -126,7 +145,7 @@ class BOTAN_DLL Extensions final : public ASN1_Object
 
       /**
       * Adds a new extension to the list.
-      * @param extn the certificate extension
+      * @param extn pointer to the certificate extension (Extensions takes ownership)
       * @param critical whether this extension should be marked as critical
       * @throw Invalid_Argument if the extension is already present in the list
       */
@@ -144,8 +163,8 @@ class BOTAN_DLL Extensions final : public ASN1_Object
       * Only the known extensions types declared in this header
       * are searched for by this function.
       * @return Copy of extension with oid, nullptr if not found.
+      * Can avoid creating a copy by using get_extension_object function
       */
-      BOTAN_DEPRECATED("Use get_extension_object")
       std::unique_ptr<Certificate_Extension> get(const OID& oid) const;
 
       /**
@@ -156,7 +175,7 @@ class BOTAN_DLL Extensions final : public ASN1_Object
       * are not declared in this header, are searched for by this
       * function.
       *
-      * @return Pointer to new  extension with oid, nullptr if not found.
+      * @return Pointer to new extension with oid, nullptr if not found.
       */
       template<typename T>
       std::unique_ptr<T> get_raw(const OID& oid)
@@ -165,69 +184,79 @@ class BOTAN_DLL Extensions final : public ASN1_Object
 
          if(extn_info != m_extension_info.end())
             {
-            if(extn_info->second.m_decoded.get() == nullptr)
+            // Unknown_Extension oid_name is empty
+            if(extn_info->second.obj().oid_name() == "")
                {
-               extn_info->second.m_decoded =
-                  decode_extension_object(extn_info->first,
-                                          extn_info->second.m_critical,
-                                          extn_info->second.m_value);
-
-               if(extn_info->second.m_decoded == nullptr)
-                  {
-                  // We've now verified this extension was unknown
-                  std::unique_ptr<T> ext(new T);
-                  ext->decode_inner(extn_info->second.m_value);
-                  return std::move(ext);
-                  }
+               std::unique_ptr<T> ext(new T);
+               ext->decode_inner(extn_info->second.bits());
+               return std::move(ext);
                }
             }
+         return nullptr;
          }
 
       /**
-      * Returns the list of extensions together with the corresponding
-      * criticality flag. Only contains the known extensions
-      * types declared in this header.
+      * Returns a copy of the list of extensions together with the corresponding
+      * criticality flag. All extensions are encoded as some object, falling back
+      * to Unknown_Extension class which simply allows reading the bytes as well
+      * as the criticality flag.
       */
       std::vector<std::pair<std::unique_ptr<Certificate_Extension>, bool>> extensions() const;
 
       /**
       * Returns the list of extensions as raw, encoded bytes
       * together with the corresponding criticality flag.
-      * Contains all extensions, known as well as unknown extensions.
+      * Contains all extensions, including any extensions encoded as Unknown_Extension
       */
       std::map<OID, std::pair<std::vector<uint8_t>, bool>> extensions_raw() const;
 
       Extensions() {}
-      Extensions(const Extensions&);
-      Extensions& operator=(const Extensions&);
+
+      Extensions(const Extensions&) = default;
+      Extensions& operator=(const Extensions&) = default;
+
+      Extensions(Extensions&&) = default;
+      Extensions& operator=(Extensions&) = default;
 
    private:
-      static std::unique_ptr<Certificate_Extension>
-      decode_extension_object(bool return_null_if_unknown,
-                              const OID& oid,
-                              bool critical,
-                              std::vector<uint8_t>& body);
+      static Certificate_Extension* create_extn_obj(const OID& oid,
+                                                    bool critical,
+                                                    const std::vector<uint8_t>& body);
 
-      class Extensions_Info {
-      public:
-         Extensions_Info(bool critical, std::vector<uint8_t>& body) {}
+      class Extensions_Info
+         {
+         public:
+            Extensions_Info(bool critical,
+                            Certificate_Extension* ext) :
+               m_critical(critical),
+               m_bits(ext->encode_inner()),
+               m_obj(ext)
+               {}
 
-         Extensions_Info(bool critical, Certificate_Extension* extn) :
-            m_critical(critical),
-            m_value(extn->decode_inner()),
-            m_decoded(extn)
-            {}
+            Extensions_Info(bool critical,
+                            const std::vector<uint8_t>& encoding,
+                            Certificate_Extension* ext) :
+               m_critical(critical),
+               m_bits(encoding),
+               m_obj(ext)
+               {}
 
-      private:
-         bool m_critical = false;
-         std::vector<uint8_t> m_value;
-         std::unique_ptr<Certificate_Extension> m_decoded;
+            bool is_critical() const { return m_critical; }
+            const std::vector<uint8_t>& bits() const { return m_bits; }
+            const Certificate_Extension& obj() const
+               {
+               BOTAN_ASSERT_NONNULL(m_obj.get());
+               return *m_obj.get();
+               }
+
+         private:
+            bool m_critical = false;
+            std::vector<uint8_t> m_bits;
+            std::shared_ptr<const Certificate_Extension> m_obj;
          };
 
+      std::vector<OID> m_extension_oids;
       std::map<OID, Extensions_Info> m_extension_info;
-
-      //std::map<OID, std::pair<std::vector<uint8_t>, bool>> m_extensions_raw;
-      //std::vector<std::pair<std::unique_ptr<Certificate_Extension>, bool>> m_extensions;
    };
 
 namespace Cert_Extension {
@@ -648,13 +677,23 @@ class BOTAN_DLL Unknown_Extension final : public Certificate_Extension
       Unknown_Extension* copy() const override
          { return new Unknown_Extension(m_oid, m_critical); }
 
+      /**
+      * Return the OID of this unknown extension
+      */
       OID oid_of() const override
          { return m_oid; };
 
       //static_oid not defined for Unknown_Extension
 
-      const std::vector<uint8_t>& contents() const
-         { return m_bytes; }
+      /**
+      * Return the extension contents
+      */
+      const std::vector<uint8_t>& extension_contents() const { return m_bytes; }
+
+      /**
+      * Return if this extension was marked critical
+      */
+      bool is_critical_extension() const { return m_critical; }
 
       void validate(const X509_Certificate&, const X509_Certificate&,
       		const std::vector<std::shared_ptr<const X509_Certificate>>&,
@@ -668,8 +707,7 @@ class BOTAN_DLL Unknown_Extension final : public Certificate_Extension
          }
 
    private:
-      std::string oid_name() const override
-         { return "Unknown OID name"; }
+      std::string oid_name() const override { return ""; }
 
       bool should_encode() const override { return false; }
       std::vector<uint8_t> encode_inner() const override;

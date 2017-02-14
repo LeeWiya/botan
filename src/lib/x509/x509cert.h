@@ -269,23 +269,13 @@ class BOTAN_DLL X509_Certificate : public X509_Object
       * Return the v2 issuer key ID. v2 key IDs are almost never used,
       * instead see v3_subject_key_id.
       */
-      std::vector<uint32_t> v2_issuer_key_id() const;
+      std::vector<uint8_t> v2_issuer_key_id() const;
 
       /**
       * Return the v2 subject key ID. v2 key IDs are almost never used,
       * instead see v3_subject_key_id.
       */
-      std::vector<uint32_t> v2_subject_key_id() const;
-
-      /**
-      * Return the v3 issuer key ID
-      */
-      std::vector<uint32_t> v3_issuer_key_id() const;
-
-      /**
-      * Return the v3 subject key ID
-      */
-      std::vector<uint32_t> v3_subject_key_id() const;
+      std::vector<uint8_t> v2_subject_key_id() const;
 
       /**
       * Return the listed address of an OCSP responder, or empty if not set
@@ -363,6 +353,8 @@ class BOTAN_DLL X509_Certificate : public X509_Object
       // TODO: pimpl
       // struct X509_Certificate_Data;
       //std::unique_ptr<X509_Certificate_Data> m_cert_data;
+
+
       size_t m_version = 0;
       std::vector<uint8_t> m_serial;
       AlgorithmIdentifier m_sig_algo_inner;
@@ -387,7 +379,7 @@ class BOTAN_DLL X509_Certificate : public X509_Object
       std::vector<uint8_t> m_subject_key_id;
 
       std::vector<std::string> m_crl_distribution_points;
-      std::vector<std::string> m_ocsp_distribution_points;
+      std::vector<std::string> m_ocsp_responders;
 
       size_t m_path_len_constraint = 0;
       bool m_self_signed = false;
