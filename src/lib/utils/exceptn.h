@@ -190,6 +190,8 @@ struct BOTAN_DLL Decoding_Error : public Invalid_Argument
    {
    explicit Decoding_Error(const std::string& name) :
       Invalid_Argument("Decoding error: " + name) {}
+   explicit Decoding_Error(const std::string& name, const char* exception_message) :
+      Invalid_Argument("Decoding error: " + name + " failed with exception " + exception_message) {}
    };
 
 /**
